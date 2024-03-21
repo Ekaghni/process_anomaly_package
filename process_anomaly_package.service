@@ -1,0 +1,10 @@
+[Unit]
+Description=Process Anomaly Detection System
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /home/telaverge/process_anomaly_package/src/global_trainer.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
