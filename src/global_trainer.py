@@ -14,7 +14,126 @@ from opensearchpy import OpenSearch
 from datetime import datetime
 import json
 import os
-import os
+import subprocess
+import csv
+
+
+def update_agent_ossec():
+
+    OSSEC_CONF_FILE = "/var/ossec/etc/ossec.conf"
+    NEW_BLOCK = """
+    <localfile>
+    <location>/home/telaverge/process_anomaly_package/src/example_1.log</location>
+    <log_format>syslog</log_format>
+    </localfile>
+    """
+    if os.path.exists(OSSEC_CONF_FILE) and os.access(OSSEC_CONF_FILE, os.W_OK):
+        with open(OSSEC_CONF_FILE, "r") as file:
+            lines = file.readlines()
+
+        if NEW_BLOCK.strip() in "".join(lines).strip():
+            print("New block already present in", OSSEC_CONF_FILE)
+        else:
+
+            last_localfile_line = None
+            for i, line in enumerate(lines):
+                if "</localfile>" in line:
+                    last_localfile_line = i + 1
+
+            if last_localfile_line is not None:
+    
+                lines[last_localfile_line:last_localfile_line] = [NEW_BLOCK + "\n"]
+                print("New block added to", OSSEC_CONF_FILE)
+
+
+            with open(OSSEC_CONF_FILE, "w") as file:
+                file.writelines(lines)
+
+        ###################################### ossec file for cpu memory addition ####################################
+
+        block_to_add = """
+        <!-- Log analysis -->
+        <!-- CPU, memory, disk metric -->
+        <!-- CPU, memory, disk metric -->
+        <ossec_config>
+
+            <localfile>
+                <log_format>full_command</log_format>
+                <command>
+                    if [ "$(sudo python3 /home/telaverge/process_anomaly_package/src/global_model_training_and_inference/main_driver_code.py)" = "yes" ]; then
+                        cpu_output="$(top -bn1 | grep Cpu | awk '{print $2+$4+$6+$12+$14+$16}')"
+                    else
+                        cpu_output="0"
+                    fi
+
+                    if [ "$(sudo python3 /home/telaverge/process_anomaly_package/src/global_model_training_and_inference/main_driver_code.py)" = "yes" ]; then
+                        mem_output="$(free -m | awk 'NR==2{printf "%.2f", $3*100/$2 }')"
+                    else
+                        mem_output="0"
+                    fi
+
+                    disk_output="$(df -h | awk '$NF=="/"{print $5}'|sed 's/%//g')"
+
+                    echo "$cpu_output $mem_output $disk_output"
+                </command>
+                <alias>general_health_metrics</alias>
+                <out_format>$(timestamp) $(hostname) general_health_check: $(log)</out_format>
+                <frequency>50</frequency>
+            </localfile>
+            
+            
+                <!-- load average metrics -->
+            <localfile>
+                <log_format>full_command</log_format>
+                <command>if [ "$(sudo python3 /home/telaverge/process_anomaly_package/src/global_model_training_and_inference/main_driver_code.py)" = "yes" ]; then uptime | grep load | awk '{print $(NF-2),$(NF-1),$NF}' | sed 's/\,\([0-9]\{1,2\}\)/.\1/g'; fi</command>
+                <alias>load_average_metrics</alias>
+                <out_format>$(timestamp) $(hostname) load_average_check: $(log)</out_format>
+                <frequency>50</frequency>
+            </localfile>
+
+
+            <!-- memory metrics -->
+            <localfile>
+                <log_format>full_command</log_format>
+                <command>if [ "$(sudo python3 /home/telaverge/process_anomaly_package/src/global_model_training_and_inference/main_driver_code.py)" = "yes" ]; then free --bytes| awk 'NR==2{print $3,$7}'; fi</command>
+                <alias>memory_metrics</alias>
+                <out_format>$(timestamp) $(hostname) memory_check: $(log)</out_format>
+                <frequency>50</frequency>
+            </localfile>
+
+            <!-- disk metrics -->
+            <localfile>
+                <log_format>full_command</log_format>
+                <command>if [ "$(sudo python3 /home/telaverge/process_anomaly_package/src/global_model_training_and_inference/main_driver_code.py)" = "yes" ]; then df -B1 | awk '$NF=="/"{print $3,$4}'; fi</command>
+                <alias>disk_metrics</alias>
+                <out_format>$(timestamp) $(hostname) disk_check: $(log)</out_format>
+                <frequency>50</frequency>
+            </localfile>
+
+        </ossec_config>
+        """
+
+        file_path = "/var/ossec/etc/ossec.conf"
+
+        with open(file_path, 'r') as file:
+            file_content = file.read()
+            if block_to_add.strip() not in file_content:
+
+                with open(file_path, 'a') as file:
+                    file.write(block_to_add)
+                    print("Block added successfully.")
+            else:
+                print("Block already exists in the file.")
+
+    ##############################################################################################################################################
+
+    else:
+        print("Could not access", OSSEC_CONF_FILE)
+
+update_agent_ossec()
+
+subprocess.run(["sudo", "bash", "/home/telaverge/process_anomaly_package/src/ossec_update.sh"])
+
 
 
 def get_ip_address():
@@ -164,6 +283,9 @@ class AnomalyDetectionModel(nn.Module):
         x = self.decoder(x)
         return x
 
+
+
+
 def data_pusher():
     host = "172.16.10.131"
     port = 8200
@@ -187,21 +309,20 @@ def data_pusher():
 
     
 
-    # Load your dataset_ratings from JSON
+    
     path_json = os.getcwd()
     path_json = os.path.join(path_json, "anomaly_scores.json")
     with open(path_json, 'r') as file:
         data = json.load(file)
 
-    # Iterate over each entry in the JSON data
     for entry in data:
-        # Convert '@timestamp' to datetime object
+
         timestamp_dt = datetime.utcnow()
 
-        # Extract epoch timestamp from datetime object
+
         timestamp_epoch = timestamp_dt.timestamp()
 
-        # Create document with converted timestamp and other fields as floats
+
         document = {
             '@timestamp': timestamp_epoch,
             'ip': entry['ip'],
@@ -209,7 +330,7 @@ def data_pusher():
             'anomaly_score': entry['anomaly_score']
         }
 
-        # Push data to the index
+
         response = client.index(
             index=index_name,
             body=document,
@@ -348,6 +469,30 @@ class ProcessAnomalyDetection:
 
         return ann
 
+def monitor_cpu_memory(interval=60, duration=None):
+    file_exists = os.path.isfile('/home/telaverge/process_anomaly_package/src/global_model_training_and_inference/cpu_memory_usage.csv')
+    with open('/home/telaverge/process_anomaly_package/src/global_model_training_and_inference/cpu_memory_usage.csv', mode='a' if file_exists else 'w', newline='') as file:
+        writer = csv.writer(file)
+
+        if not file_exists:
+            writer.writerow(['cpu_usage', 'memory_usage', 'Timestamp_of_each_day'])
+        
+        # if duration:
+        #     end_time = time.time() + duration
+        #     while time.time() < end_time:
+        #         write_to_csv(writer, file)
+        #         time.sleep(interval)
+                
+        else:
+            # while True:
+            write_to_csv(writer, file)
+            # time.sleep(interval)
+
+def write_to_csv(writer, file):
+    cpu_percent = round(psutil.cpu_percent() / 100, 2)
+    memory_percent = round(psutil.virtual_memory().percent / 100, 2)
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    writer.writerow([cpu_percent, memory_percent, timestamp])
 
 if __name__ == "__main__":
 
@@ -412,11 +557,11 @@ if __name__ == "__main__":
 
 
 
-        with open('average_anomaly_scores.json', 'w') as f:
+        with open('/home/telaverge/process_anomaly_package/src/average_anomaly_scores.json', 'w') as f:
             json.dump(avg_scores, f, indent=4)
         print("Average anomaly scores saved to average_anomaly_scores.json")
 
-        output_path = 'anomaly_scores.json'
+        output_path = '/home/telaverge/process_anomaly_package/src/anomaly_scores.json'
         with open(output_path, 'w') as f:
             json.dump(filtered_pid_anomaly_scores, f, indent=4)
         print("Filtered anomaly scores saved to:", output_path)
@@ -426,8 +571,28 @@ if __name__ == "__main__":
 
         logging.info('Reached step 3....')
 
-        data_pusher()
-        time.sleep(60)
+        # data_pusher()
+
+        with open('/home/telaverge/process_anomaly_package/src/anomaly_scores.json', 'r') as file:
+            data = json.load(file)
+        with open('/home/telaverge/process_anomaly_package/src/example_1.log', 'a') as logfile:
+            for entry in data:
+
+                logfile.write(json.dumps(entry) + '\n')
+        counter =0
+
+        while True:
+            monitor_cpu_memory()
+            print("Writing data to file......")
+
+            time.sleep(60)
+            counter +=1
+
+            if(counter==10):
+              break
+
+
+        # time.sleep(600)
 
 
 
